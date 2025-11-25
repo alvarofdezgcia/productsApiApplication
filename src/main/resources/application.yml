@@ -1,0 +1,62 @@
+server:
+  port: 5000
+
+spring:
+  application:
+    name: similar-products-service
+
+# External API configuration
+external:
+  api:
+    base-url: http://localhost:3001
+    timeout:
+      connect: 2000
+      read: 5000
+
+# Resilience4j configuration
+resilience4j:
+  circuitbreaker:
+    instances:
+      productService:
+        registerHealthIndicator: true
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        permittedNumberOfCallsInHalfOpenState: 3
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 50
+        slowCallRateThreshold: 100
+        slowCallDurationThreshold: 3s
+
+  retry:
+    instances:
+      productService:
+        maxAttempts: 3
+        waitDuration: 500ms
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2
+        retryExceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - java.net.SocketTimeoutException
+
+  timelimiter:
+    instances:
+      productService:
+        timeoutDuration: 5s
+        cancelRunningFuture: true
+
+# Actuator endpoints
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+# Logging
+logging:
+  level:
+    com.inditex.similarproducts: INFO
+    io.github.resilience4j: DEBUG
