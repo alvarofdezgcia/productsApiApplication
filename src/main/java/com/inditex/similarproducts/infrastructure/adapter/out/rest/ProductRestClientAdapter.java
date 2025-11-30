@@ -2,6 +2,7 @@ package com.inditex.similarproducts.infrastructure.adapter.out.rest;
 
 import com.inditex.similarproducts.domain.model.ProductDetail;
 import com.inditex.similarproducts.domain.port.out.ProductRepositoryPort;
+import com.inditex.similarproducts.infrastructure.mapper.ProductMapper;
 import com.inditex.similarproducts.infrastructure.exception.ProductNotFoundException;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
@@ -31,14 +32,30 @@ public class ProductRestClientAdapter implements ProductRepositoryPort {
 
     private final RestTemplate restTemplate;
     private final String baseUrl;
+    private final ProductMapper productMapper;
 
     public ProductRestClientAdapter(
             RestTemplate restTemplate,
-            @Value("${external.api.base-url}") String baseUrl) {
+            @Value("${external.api.base-url}") String baseUrl,
+            ProductMapper productMapper) {
         this.restTemplate = restTemplate;
         this.baseUrl = baseUrl;
+        this.productMapper = productMapper;
     }
 
+    /**
+     * Retrieves a list of similar product IDs for a given product.
+     * <p>
+     * This method calls the external API endpoint: GET
+     * /product/{productId}/similarids
+     * It is protected by a Circuit Breaker and Retry mechanism.
+     * </p>
+     *
+     * @param productId the ID of the product
+     * @return a list of similar product IDs, or an empty list if fallback is
+     *         triggered
+     * @throws ProductNotFoundException if the product does not exist (404)
+     */
     @Override
     @CircuitBreaker(name = CIRCUIT_BREAKER_NAME, fallbackMethod = "getSimilarProductIdsFallback")
     @Retry(name = CIRCUIT_BREAKER_NAME)
@@ -51,15 +68,15 @@ public class ProductRestClientAdapter implements ProductRepositoryPort {
                     url,
                     HttpMethod.GET,
                     null,
-                    new ParameterizedTypeReference<List<String>>() {}
-            );
+                    new ParameterizedTypeReference<List<String>>() {
+                    });
 
             List<String> similarIds = response.getBody();
-            logger.debug("Retrieved {} similar product IDs for product {}", 
-                        similarIds != null ? similarIds.size() : 0, productId);
-            
+            logger.debug("Retrieved {} similar product IDs for product {}",
+                    similarIds != null ? similarIds.size() : 0, productId);
+
             return similarIds != null ? similarIds : List.of();
-            
+
         } catch (HttpClientErrorException.NotFound e) {
             logger.warn("Product not found: {}", productId);
             throw new ProductNotFoundException(productId);
@@ -69,6 +86,17 @@ public class ProductRestClientAdapter implements ProductRepositoryPort {
         }
     }
 
+    /**
+     * Retrieves the details of a specific product.
+     * <p>
+     * This method calls the external API endpoint: GET /product/{productId}
+     * It is protected by a Circuit Breaker and Retry mechanism.
+     * </p>
+     *
+     * @param productId the ID of the product
+     * @return an {@link Optional} containing the product detail, or empty if not
+     *         found or fallback triggered
+     */
     @Override
     @CircuitBreaker(name = CIRCUIT_BREAKER_NAME, fallbackMethod = "getProductDetailFallback")
     @Retry(name = CIRCUIT_BREAKER_NAME)
@@ -79,8 +107,7 @@ public class ProductRestClientAdapter implements ProductRepositoryPort {
         try {
             ResponseEntity<ProductDetailDto> response = restTemplate.getForEntity(
                     url,
-                    ProductDetailDto.class
-            );
+                    ProductDetailDto.class);
 
             ProductDetailDto dto = response.getBody();
             if (dto == null) {
@@ -88,16 +115,11 @@ public class ProductRestClientAdapter implements ProductRepositoryPort {
                 return Optional.empty();
             }
 
-            ProductDetail productDetail = new ProductDetail(
-                    dto.getId(),
-                    dto.getName(),
-                    dto.getPrice(),
-                    dto.getAvailability()
-            );
+            ProductDetail productDetail = productMapper.toDomain(dto);
 
             logger.debug("Successfully retrieved product detail for {}", productId);
             return Optional.of(productDetail);
-            
+
         } catch (HttpClientErrorException.NotFound e) {
             logger.warn("Product detail not found for ID: {}", productId);
             return Optional.empty();

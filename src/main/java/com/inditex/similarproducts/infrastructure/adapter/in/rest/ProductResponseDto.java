@@ -1,17 +1,13 @@
-package com.inditex.similarproducts.infrastructure.adapter.out.rest;
+package com.inditex.similarproducts.infrastructure.adapter.in.rest;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-/**
- * DTO for product detail response from external API.
- */
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class ProductDetailDto {
-
+public class ProductResponseDto {
     private String id;
     private String name;
     private Double price;

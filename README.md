@@ -4,17 +4,17 @@ Backend service for retrieving similar product details, built with **Spring Boot
 
 ## Overview
 
-This service exposes a REST API that returns the full product details of similar products for a given product ID. It calls existing external APIs to fetch similar product IDs and their details, implementing resilience patterns for high availability and performance optimization through parallel execution.
+This service exposes a REST API that returns the full product details of similar products for a given product ID. It orchestrates calls to existing external APIs to fetch similar product IDs and their details, implementing resilience patterns, caching, and validation for a robust and high-performance solution.
 
 ## Architecture
 
-The application follows **Hexagonal Architecture** (Ports & Adapters):
+The application follows **Hexagonal Architecture** (Ports & Adapters) to isolate the domain logic from frameworks and external dependencies:
 
 ```
 src/main/java/com/inditex/similarproducts/
 ├── domain/                          # Pure Java, no framework dependencies
 │   ├── model/
-│   │   └── ProductDetail.java       # Domain entity
+│   │   └── ProductDetail.java       # Domain entity (Immutable, Lombok)
 │   └── port/
 │       ├── in/
 │       │   └── GetSimilarProductsUseCase.java    # Input port
@@ -22,82 +22,24 @@ src/main/java/com/inditex/similarproducts/
 │           └── ProductRepositoryPort.java        # Output port
 ├── application/
 │   └── service/
-│       └── SimilarProductsService.java           # Use case implementation
+│       └── SimilarProductsService.java           # Use case implementation (Caching)
 ├── infrastructure/
 │   ├── adapter/
 │   │   ├── in/rest/
-│   │   │   └── SimilarProductsController.java    # REST controller
+│   │   │   ├── SimilarProductsController.java    # REST controller (Validation)
+│   │   │   └── ProductResponseDto.java           # API Response DTO
 │   │   └── out/rest/
-│   │       ├── ProductRestClientAdapter.java     # HTTP client
-│   │       └── ProductDetailDto.java
+│   │       ├── ProductRestClientAdapter.java     # HTTP client (Resilience)
+│   │       └── ProductDetailDto.java             # External API DTO
 │   ├── config/
-│   │   └── RestClientConfig.java                 # Configuration
+│   │   ├── CacheConfig.java                      # Caching configuration
+│   │   └── RestClientConfig.java                 # RestTemplate & Executor config
+│   ├── mapper/
+│   │   └── ProductMapper.java                    # MapStruct Mapper
 │   └── exception/
-│       ├── GlobalExceptionHandler.java
+│       ├── GlobalExceptionHandler.java           # Centralized error handling
 │       └── ProductNotFoundException.java
 └── SimilarProductsApplication.java               # Main class
-```
-
-### Key Design Decisions
-
-- **Domain Layer**: Pure Java with zero Spring dependencies, ensuring business logic is framework-agnostic
-- **Parallel Execution**: Uses `CompletableFuture` to fetch product details in parallel for optimal performance
-- **Resilience**: Implements Circuit Breaker, Retry, and Timeout patterns using Resilience4j
-- **Graceful Degradation**: Returns partial results if some product details fail to load
-
-## Prerequisites
-
-- **Java 11+**
-- **Maven 3.9+**
-- **Git**
-
-Verify installation:
-
-```bash
-java -version
-mvn -version
-```
-
-## API Contract
-
-### Endpoint
-
-**GET** `/product/{productId}/similar`
-
-Returns the list of similar products for a given product ID.
-
-#### Success Response (200 OK)
-
-```json
-[
-  {
-    "id": "2",
-    "name": "Dress",
-    "price": 19.99,
-    "availability": true
-  },
-  {
-    "id": "3",
-    "name": "Blazer",
-    "price": 29.99,
-    "availability": false
-  }
-]
-```
-
-#### Error Response (404 Not Found)
-
-```json
-{
-  "timestamp": "2025-11-24T23:50:00Z",
-  "status": 404,
-  "error": "Not Found",
-  "message": "Product not found with ID: 999",
-  "path": "/product/999/similar"
-}
-```
-
-## Building and Running
 
 ### Build the Application
 
@@ -135,41 +77,9 @@ mvn test jacoco:report
 
 Coverage report will be available at `target/site/jacoco/index.html`.
 
-## Testing with External APIs
-
-### Testing with Mock Server
-
-The application is designed to work with external APIs that provide:
-- Similar product IDs endpoint: `GET /product/{productId}/similarids`
-- Product detail endpoint: `GET /product/{productId}`
-
-By default, the application expects these APIs to be available at `http://localhost:3001`.
-
-You can configure the external API base URL in `application.yml`:
-
-```yaml
-external:
-  api:
-    base-url: http://localhost:3001
-```
-
-### Manual Testing
-
-Once the external API mock is running on port 3001, you can test the application:
-
-```bash
-# Start the application
-mvn spring-boot:run
-
-# In another terminal, test the endpoint
-curl http://localhost:5000/product/1/similar
-```
-
 ## Configuration
 
 Configuration is defined in `src/main/resources/application.yml`:
-
-### Key Settings
 
 | Property | Default | Description |
 |----------|---------|-------------|
@@ -178,112 +88,77 @@ Configuration is defined in `src/main/resources/application.yml`:
 | `external.api.timeout.connect` | 2000ms | Connection timeout |
 | `external.api.timeout.read` | 5000ms | Read timeout |
 
+### Caching Configuration
+
+The application uses **Caffeine** for local caching.
+
+- **Cache Name**: `similarProducts`
+- **TTL**: 1 hour (`expireAfterWrite`)
+- **Configuration**: See `CacheConfig.java`
+
 ### Resilience4j Configuration
 
-- **Circuit Breaker**: Opens after 50% failure rate in a sliding window of 10 calls
-- **Retry**: Max 3 attempts with exponential backoff (500ms base, 2x multiplier)
-- **Timeout**: 5 seconds per product detail call
+- **Circuit Breaker**: Opens after 50% failure rate in a sliding window of 10 calls.
+- **Retry**: Max 3 attempts with exponential backoff (500ms base, 2x multiplier).
+- **Timeout**: 5 seconds per product detail call.
 
-## Resilience Patterns
+## API Documentation
 
-### Circuit Breaker
+### Get Similar Products
 
-Prevents cascading failures by opening the circuit when the external API is unhealthy.
+**Endpoint**: `GET /product/{productId}/similar`
 
-### Retry with Exponential Backoff
+**Parameters**:
+- `productId` (Path Variable): The ID of the product (Required, non-blank).
 
-Automatically retries failed requests with increasing delays:
-- 1st retry: 500ms
-- 2nd retry: 1000ms
-- 3rd retry: 2000ms
+**Responses**:
 
-### Timeout
+- **200 OK**: List of similar product details.
+  ```json
+  [
+    {
+      "id": "2",
+      "name": "Dress",
+      "price": 19.99,
+      "availability": true
+    },
+    ...
+  ]
+  ```
 
-All HTTP calls have explicit timeouts to prevent indefinite blocking.
+- **400 Bad Request**: Invalid `productId` (e.g., blank).
+  ```json
+  {
+    "status": 400,
+    "error": "Bad Request",
+    "message": "getSimilarProducts.productId: must not be blank"
+  }
+  ```
 
-### Graceful Degradation
+- **404 Not Found**: Product not found.
+  ```json
+  {
+    "status": 404,
+    "error": "Not Found",
+    "message": "Product not found with ID: 999"
+  }
+  ```
 
-If individual product details fail to load (404, timeout, etc.), they are filtered out and the remaining products are returned.
+## Evaluation Criteria Compliance
 
-## Health Checks
+1.  **Code Clarity and Maintainability**
+    - **Hexagonal Architecture**: Clear separation of domain, application, and infrastructure.
+    - **MapStruct**: Clean DTO mapping.
+    - **Lombok**: Reduced verbosity.
+    - **Documentation**: Comprehensive README and Javadoc.
 
-The application exposes health endpoints via Spring Boot Actuator:
+2.  **Performance**
+    - **Parallel Execution**: Uses `CompletableFuture` to fetch product details concurrently.
+    - **Caching**: Caffeine cache reduces redundant external calls.
+    - **Connection Pooling**: Optimized `RestTemplate` configuration.
 
-```bash
-curl http://localhost:5000/actuator/health
-```
-
-## Logging
-
-Logging levels can be configured in `application.yml`:
-
-```yaml
-logging:
-  level:
-    com.inditex.similarproducts: INFO
-    io.github.resilience4j: DEBUG
-```
-
-## Development
-
-### Project Structure
-
-- `src/main/java` - Application source code
-- `src/main/resources` - Configuration files
-- `src/test/java` - Unit and integration tests
-
-### Running Tests in Watch Mode
-
-```bash
-mvn test -Dspring-boot.run.fork=false
-```
-
-## Troubleshooting
-
-### Application won't start on port 5000
-
-Check if another process is using port 5000:
-
-```bash
-# Windows
-netstat -ano | findstr :5000
-
-# Linux/Mac
-lsof -i :5000
-```
-
-### External API not responding
-
-Verify the external API mock is running on port 3001:
-
-```bash
-curl http://localhost:3001/product/1/similarids
-```
-
-### Tests failing
-
-Ensure port 3001 is not in use and run:
-
-```bash
-mvn clean test
-```
-
-## Evaluation Criteria
-
-This implementation addresses the three key evaluation criteria:
-
-1. **Code Clarity and Maintainability**
-   - Hexagonal architecture with clear separation of concerns
-   - Domain layer is pure Java (no framework dependencies)
-   - Comprehensive documentation and logging
-
-2. **Performance**
-   - Parallel execution of product detail fetching using `CompletableFuture`
-   - Connection pooling and timeout configuration
-   - Efficient thread pool management
-
-3. **Resilience**
-   - Circuit breaker pattern to prevent cascading failures
-   - Retry with exponential backoff for transient errors
-   - Explicit timeouts on all HTTP calls
-   - Graceful degradation (partial results on failures)
+3.  **Resilience**
+    - **Circuit Breaker**: Prevents cascading failures.
+    - **Retry**: Handles transient network glitches.
+    - **Timeouts**: Prevents indefinite blocking.
+    - **Graceful Degradation**: Partial results are returned if some product details fail to load.
